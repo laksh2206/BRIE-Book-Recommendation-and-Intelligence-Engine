@@ -4,27 +4,42 @@ import json
 import re
 from pymongo import MongoClient
 import math
+import plotly
 import plotly.graph_objs as go
 import plotly.offline as opy
 from collections import defaultdict
 from collections import Counter
-import plotly.plotly
+# import plotly.plotly  # removed: deprecated in plotly>=4
 from plotly.graph_objs import Bar, Scatter, Layout
 import numpy as np
 import collections
 import random
+import os
 from os import path
 from PIL import Image
 import string
 #from wordcloud import WordCloud
 #import matplotlib.pyplot as plt
 
-mongo_client = MongoClient('mongodb+srv://brie:brie1234@brie-mongo-cluster-m0oah.mongodb.net/Brie')
-mongo_brie_db = mongo_client.Brie
+try:
+    mongo_client = MongoClient(os.environ['MONGO_URI'], serverSelectionTimeoutMS=3000)
+    mongo_brie_db = mongo_client.Brie
+    books_collection = mongo_brie_db.Books
+    similar_books_collection = mongo_brie_db.Books_Similar
+    goodreads_description = mongo_brie_db.Books_GoodReads
+except Exception:
+    mongo_client = None
+    mongo_brie_db = None
+    books_collection = None
+    similar_books_collection = None
+    goodreads_description = None
 
-books_collection = mongo_brie_db.Books
-similar_books_collection = mongo_brie_db.Books_Similar
-goodreads_description = mongo_brie_db.Books_GoodReads
+
+def _cover_url(isbn):
+    """Return an Open Library cover URL for the given ISBN, or empty string."""
+    if isbn:
+        return f"https://covers.openlibrary.org/b/isbn/{isbn}-L.jpg"
+    return ""
 
 
 def index(request):
@@ -42,13 +57,12 @@ def search_result(request):
 
         results = books_collection.find({"title": rgx})
         response = []
-        print(results)
         for book in results:
             book_dict = dict()
             book_dict["title"] = book["title"]
             book_dict["author"] = book["author"]
             book_dict["publication"] = book["publication"]
-            book_dict["img_url"] = book["image"]
+            book_dict["img_url"] = _cover_url(book.get("isbn", ""))
             book_dict["id"] = book["id"]
             response.append(book_dict)
 
@@ -59,8 +73,14 @@ def search_result(request):
 
 def book_view(request, book_id):
     book = books_collection.find_one({"id": book_id})
+    if book is None:
+        return HttpResponse("Book not found", status=404)
     book_similar = similar_books_collection.find_one({"Id": book_id})
+    if book_similar is None:
+        return HttpResponse("Book not found", status=404)
     book_goodreads_desc = goodreads_description.find_one({"id": book_id})
+    if book_goodreads_desc is None:
+        return HttpResponse("Book not found", status=404)
 
     context = dict()
     context["title"] = book["title"]
@@ -68,7 +88,7 @@ def book_view(request, book_id):
     context["pages"] = book["pages"]
     context["ID"] = book_id
     context["publication"] = book["publication"]
-    context["image"] = book["image"]
+    context["image"] = _cover_url(book.get("isbn", ""))
     context["rating"] = book["rating"]
     context["indie_price"] = book["indie_price"]
     context["indie_url"] = book["indie_url"]
@@ -101,13 +121,14 @@ def book_view(request, book_id):
 
         try:
             avgPrice = round(sum/n, 2)
-        except:
-            pass
+        except (ZeroDivisionError, TypeError):
+            avgPrice = 0
 
         title_sim.append(sim_book['title'])
         pages_sim.append(sim_book['pages'])
         avg_price_sim.append(avgPrice)
 
+        sim_book["image"] = _cover_url(sim_book.get("isbn", ""))
         sim_list.append(sim_book)
 
     context["similar_books"] = sim_list
@@ -124,8 +145,8 @@ def book_view(request, book_id):
 
     try:
         b_avgPrice = round(b_sum / b_n, 2)
-    except:
-        pass
+    except (ZeroDivisionError, TypeError):
+        b_avgPrice = 0
     title_sim.append(book['title'])
     pages_sim.append(book['pages'])
     avg_price_sim.append(b_avgPrice)
@@ -241,7 +262,7 @@ def book_view(request, book_id):
     colors = ['#DAB808', '#AFD5AA', '#6C91C2', '#FE5F55']
     trace = go.Pie(labels=genres_lst, values=genres_percent,
                    marker=dict(colors=colors),textfont=dict(size=18))  # marker=dict(colors=colors, line=dict(color='#000000', width=1))
-    data = go.Data([trace])
+    data = [trace]
     layout = go.Layout(title="<b>Genre Dissection</b>", height=500, width=500,
                        autosize=False)
     figure = go.Figure(data=data, layout=layout)
@@ -499,7 +520,7 @@ def overview(request):
     price_labels = price_labels[0:15]
     price_values = price_values[0:15]
 
-    trace = go.Bar(x=price_labels, y=price_values, hoverinfo='label+percent',
+    trace = go.Bar(x=price_labels, y=price_values, hoverinfo='x+y',
                    marker=dict(
                        color=[
                            '#3C015E', '#44026B', '#530282', '#5B028E', '#600396',
@@ -507,7 +528,7 @@ def overview(request):
                            '#8708D1', '#8C08D8', '#9409E5', '#9700EF', '#A100FF'
                        ]
                    ))
-    data = go.Data([trace])
+    data = [trace]
     layout = go.Layout(title="<b>Average Book-Price per Genre</b>", height=500, width=1300, autosize=False,
                        font=dict(size=15), yaxis=dict(title='Price of Books'), xaxis=dict(title='Genres'))
 
@@ -552,10 +573,10 @@ def overview(request):
 
     trace = go.Scatter(
         x=chart_labels,
-        y=number_of_pages_values, mode="lines+markers+text", textposition="top", text=number_of_pages_values,
+        y=number_of_pages_values, mode="lines+markers+text", textposition="top center", text=number_of_pages_values,
         connectgaps=True, hoverinfo='y')
 
-    data = go.Data([trace])
+    data = [trace]
     layout = go.Layout(title="<b>Average Number of Pages by Year</b>", height=500, width=1100,
                        autosize=False, font=dict(size=15),
                        yaxis=dict(title='Number of Pages', range=[0, 1000]),
@@ -678,7 +699,7 @@ def overview(request):
 
     trace = go.Scatter(
         x=pages_labels,
-        y=price_labels, mode="lines+markers+text", textposition="top",
+        y=price_labels, mode="lines+markers+text", textposition="top center",
         connectgaps=True, hoverinfo='y'
     )
     data = [trace]
@@ -916,7 +937,7 @@ def publishers(request):
     for genre in top_genres:
         book_count_list = []
         for publisher in publisher_names:
-            book_count = books_collection.find({"genres.0": genre, "publication": publisher}).count()
+            book_count = books_collection.count_documents({"genres.0": genre, "publication": publisher})
             book_count_list.append(book_count)
         genre_book_count_dict[genre] = book_count_list
 
@@ -1106,7 +1127,6 @@ def authors(request):
     sorted_authors = []
     sorted_price = []
     for row in author_ratings:
-        print(row)
         rating = "%.2f" % row["avgRating"]
         ratings_for_author.append(rating)
         sorted_authors.append(row["_id"])
@@ -1242,15 +1262,12 @@ def evaluation(request):
         else:
             failure += 1
 
-    print(success)
-    print(failure)
-
     context = dict()
     colors = ['#12BA34', '#DF2935']
 
     trace = go.Pie(labels=["Success - More than 2 Hits", "Failure - Lesser than 2 Hits"], values=[success, failure],
                    marker=dict(colors=colors), textfont=dict(size=22))
-    data = go.Data([trace])
+    data = [trace]
     layout = go.Layout(title="<b>Evaluation of Content-Genre Dissection</b>", height=700, width=700,
                        autosize=False)
     figure = go.Figure(data=data, layout=layout)
@@ -1293,7 +1310,6 @@ def get_recommendations(request):
             dislike_books.append(book_id)
             dislike_books_alone.append(book_id)
             for i in range(1, 11):
-                print(sim_book_ids["SIM" + str(i)])
                 dislike_books.append(sim_book_ids["SIM" + str(i)])
 
     # Fetch Like and dislike books data
@@ -1311,8 +1327,6 @@ def get_recommendations(request):
         genre_dissect = book["genre_dissect"]
         for genre in genre_dissect:
             genre_score_dict[genre] += genre_dissect[genre]
-    print(genre_score_dict)
-
     # Take word counts for likes and dislike books
     like_words_dict = dict()
     like_words_dict = defaultdict(lambda: 0, like_words_dict)
@@ -1368,7 +1382,6 @@ def get_recommendations(request):
         real_sorted_genre_list.append(w)
         real_sorted_genre_scores.append(real_genre_dict[w])
 
-    print(real_sorted_genre_list)
     has_child = False
     if "Childrens" in real_sorted_genre_list[0:2]:
         has_child = True
@@ -1389,7 +1402,7 @@ def get_recommendations(request):
             if series_name in dislike_series:
                 continue
 
-        if (book_title in like_books_alone) or (book_title in dislike_books):
+        if (book["id"] in like_books_alone) or (book["id"] in dislike_books):
             continue
 
         actual_book_genres = book["genres"]
@@ -1433,12 +1446,11 @@ def get_recommendations(request):
             continue
         book_name = book_dets["title"]
         i += 1
-        print(book_name + " " + str(book_suggestion_score_dict[w]))
         book_dict = dict()
         book_dict["id"] = w
         book_dict["title"] = book_name
         book_dict["author"] = book_dets["author"]
-        book_dict["img_url"] = book_dets["image"]
+        book_dict["img_url"] = _cover_url(book_dets.get("isbn", ""))
         book_dict["publication"] = book_dets["publication"]
         book_dict["score"] = book_suggestion_score_dict[w]
         response.append(book_dict)
@@ -1449,7 +1461,6 @@ def get_recommendations(request):
     top_words_list = []
     top_words_score = []
     for w in sorted(word_strength_dict, key=word_strength_dict.get, reverse=True):
-        print(w + " " + str(word_strength_dict[w]))
         i += 1
         top_words_list.append(w)
         top_words_score.append("%.2f" % word_strength_dict[w])
@@ -1475,7 +1486,7 @@ def get_recommendations(request):
                                show_link=False)
 
     trace = go.Pie(labels=real_sorted_genre_list[0:5], values=real_sorted_genre_scores[0:5], textfont=dict(size=18))
-    data = go.Data([trace])
+    data = [trace]
     layout = go.Layout(title="<b>Genre Dissection of you taste</b>", height=500, width=500,
                        autosize=False)
     figure = go.Figure(data=data, layout=layout)
@@ -1486,4 +1497,4 @@ def get_recommendations(request):
     charts["words_table_div"] = words_table_div
     response.append(charts)
 
-    return HttpResponse([json.dumps(response)])
+    return HttpResponse(json.dumps(response), content_type='application/json')

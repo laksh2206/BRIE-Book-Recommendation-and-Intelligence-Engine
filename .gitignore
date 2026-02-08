@@ -1,3 +1,32 @@
-*.pyc
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# Django
+db.sqlite3
+staticfiles/
+*.log
+
+# Environment / secrets
+.env
+
+# Heroku
 .heroku
-.vscode
+
+# Distribution
+*.egg-info/
+dist/
+build/
